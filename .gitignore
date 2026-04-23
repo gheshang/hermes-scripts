@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets
+.env
+*.key
+cookies.json
+
+# OS
+.DS_Store
+Thumbs.db
