@@ -332,6 +332,9 @@ def feat4_credential_pool():
         return
     provider = ask("配置哪个 provider 的密钥池策略？", "zai")
     strategy = ask("策略 (least_used/round_robin/random/fill_first)", "least_used")
+    if strategy not in ("least_used", "round_robin", "random", "fill_first"):
+        print(f" ⚠ 无效策略 '{strategy}'，回退默认 least_used")
+        strategy = "least_used"
     run(["hermes", "config", "set", f"credential_pool_strategies.{provider}", strategy])
     print(f"  ✓ credential_pool_strategies.{provider} = {strategy}")
 
@@ -346,12 +349,12 @@ def feat4_credential_pool():
     else:
         keys_added = []
         while True:
-            env_var = ask(f"  密钥环境变量名（如 GLM_API_KEY, ZAI_API_KEY_{len(keys_added)+1}）", "")
+            env_var = ask(f" 密钥环境变量名（如 GLM_API_KEY, ZAI_API_KEY_{len(keys_added)+1}）", "")
             if not env_var:
                 break
-            key_val = input(f"  输入 {env_var} 的值: ").strip()
+            key_val = input(f" 输入 {env_var} 的值: ").strip()
             if not key_val:
-                print("  值为空，跳过")
+                print(" 值为空，跳过")
                 continue
             keys_added.append((env_var, key_val))
             if not ask_yn("继续添加下一个密钥？(y/n)", "n"):
@@ -360,10 +363,11 @@ def feat4_credential_pool():
         base_url = ask("统一 base_url（回车跳过）", "")
         if base_url:
             keys_added.append((f"{provider.upper()}_BASE_URL", base_url))
+            run(["hermes", "config", "set", "model.base_url", base_url])
 
         if keys_added:
             write_env_batch(keys_added)
-            print("  提示：运行 hermes auth add 将密钥 seed 到池中")
+            print(" 提示：运行 hermes auth add 将密钥 seed 到池中")
 
     print("\n  检查池状态：hermes auth list")
     print("  OAuth 凭证（Anthropic/Copilot）：hermes auth add <provider> --type oauth")
@@ -507,7 +511,9 @@ def feat8_profile():
     cmd = ["hermes", "profile", "create", profile_name]
     if use_clone:
         cmd.append("--clone")
-    run(cmd)
+    if not run(cmd):
+        print(" ⚠ Profile 创建失败，跳过后续配置")
+        return
 
     if ask_yn("是否设为默认 Profile？(y/n)", "n"):
         run(["hermes", "profile", "use", profile_name])
@@ -585,17 +591,15 @@ def feat11_cron():
             run(["hermes", "gateway"])
 
     if ask_yn("是否创建一个示例 Cron 任务？(y/n)", "n"):
-        print("  示例：每天早8点总结AI新闻")
+        print(" 示例：每天早8点总结AI新闻")
         schedule = ask("Cron 表达式或自然语言（如 '0 8 * * *' 或 '每天早上8点'）", "0 8 * * *")
         prompt_text = ask("任务指令", "总结昨天AI圈最重要的3条新闻")
         target = ask("结果推送到哪（如 telegram/discord/local，留空=仅保存）", "local")
-        safe_schedule = shlex.quote(schedule)
-        safe_prompt = shlex.quote(prompt_text)
-        target_flag = f"--deliver {shlex.quote(target)}" if target else ""
-        print("  建议直接跟 Hermes 说：")
-        print(f'  "{schedule} {prompt_text}"')
-        print("  或手动创建：")
-        print(f"  hermes cron create --schedule {safe_schedule} --prompt {safe_prompt} {target_flag}")
+        if ask_yn("现在创建？(y/n)", "y"):
+            run(["hermes", "cron", "create", "--schedule", schedule, "--prompt", prompt_text, "--deliver", target])
+        else:
+            print(" 建议直接跟 Hermes 说：")
+            print(f'  "{schedule} {prompt_text}"')
 
     print("  管理命令：")
     print("  hermes cron list — 查看所有定时任务")
@@ -749,11 +753,21 @@ def feat15_shell_hooks():
     if not ask_yn("是否配置 shell hook？(y/n)", "n"):
         return
 
+    VALID_HOOKS = {"on_session_start", "on_session_end", "pre_tool", "post_tool",
+                    "on_agent_start", "on_agent_end"}
     hook_event = ask("钩子事件 (如 pre_tool/on_session_start)", "pre_tool")
+    if hook_event not in VALID_HOOKS:
+        print(f" ⚠ 无效事件 '{hook_event}'，有效值：{', '.join(sorted(VALID_HOOKS))}")
+        if not ask_yn("仍然继续？(y/n)", "n"):
+            return
     hook_script = ask("脚本路径 (绝对路径)", "")
     if not hook_script:
-        print("  ⚠ 脚本路径不能为空，跳过")
+        print(" ⚠ 脚本路径不能为空，跳过")
         return
+    if not os.path.isfile(hook_script):
+        print(f" ⚠ 文件不存在: {hook_script}")
+        if not ask_yn("仍然写入配置？(y/n)", "n"):
+            return
     run(["hermes", "config", "set", f"hooks.{hook_event}", hook_script])
     print(f"  ✓ hooks.{hook_event} = {hook_script}")
     print("  提示：脚本必须可执行（chmod +x），失败不会崩溃 agent（非阻塞）")
@@ -879,10 +893,17 @@ if selection == "a":
 if selection == "0":
     chosen = sorted(VALID_KEYS, key=int)
 else:
-    chosen = sorted(
-        [k.strip() for k in selection.split(",") if k.strip() in VALID_KEYS],
-        key=int
-    )
+    raw_keys = [k.strip() for k in selection.split(",")]
+    chosen = []
+    invalid = []
+    for k in raw_keys:
+        if k in VALID_KEYS:
+            chosen.append(k)
+        elif k:
+            invalid.append(k)
+    if invalid:
+        print(f" ⚠ 忽略无效选项: {', '.join(invalid)}")
+    chosen = sorted(chosen, key=int)
 
 if not chosen:
     print("  无有效选择，退出。")
