@@ -185,14 +185,32 @@ def feat1_auxiliary():
         HEAVY = ["vision", "web_extract", "flush_memories"]
         LIGHT = ["compression", "session_search", "approval", "skills_hub", "mcp"]
 
-        print("\n  正在写入配置...")
-        heavy_key_env = {"name": "AUX_HEAVY_API_KEY", "value": heavy_api_key} if heavy_api_key else None
-        light_key_env = {"name": "AUX_LIGHT_API_KEY", "value": light_api_key} if light_api_key else None
+    heavy_key_env = {"name": "AUX_HEAVY_API_KEY", "value": heavy_api_key} if heavy_api_key else None
+    light_key_env = {"name": "AUX_LIGHT_API_KEY", "value": light_api_key} if light_api_key else None
 
-        for task in HEAVY:
-            set_auxiliary(task, heavy_provider, heavy_model, heavy_base_url, heavy_key_env)
-        for task in LIGHT:
-            set_auxiliary(task, light_provider, light_model, light_base_url, light_key_env)
+    # 批量写 env，避免逐次 IO
+    env_pairs = []
+    if heavy_api_key:
+        env_pairs.append(("AUX_HEAVY_API_KEY", heavy_api_key))
+    if light_api_key:
+        env_pairs.append(("AUX_LIGHT_API_KEY", light_api_key))
+    if heavy_base_url:
+        env_pairs.append(("AUX_HEAVY_BASE_URL", heavy_base_url))
+    if light_base_url:
+        env_pairs.append(("AUX_LIGHT_BASE_URL", light_base_url))
+
+    print("\n 正在写入配置...")
+    for task in HEAVY:
+        set_auxiliary(task, heavy_provider, heavy_model, heavy_base_url)
+        if heavy_key_env:
+            run(["hermes", "config", "set", f"auxiliary.{task}.api_key_env", "AUX_HEAVY_API_KEY"])
+    for task in LIGHT:
+        set_auxiliary(task, light_provider, light_model, light_base_url)
+        if light_key_env:
+            run(["hermes", "config", "set", f"auxiliary.{task}.api_key_env", "AUX_LIGHT_API_KEY"])
+
+    if env_pairs:
+        write_env_batch(env_pairs)
 
     else:
         # 逐任务模式
@@ -253,17 +271,21 @@ def feat2_search():
     print("  2. duckduckgo — 零成本兜底，不需 API key")
     print("  3. 跳过")
 
-    search_choice = ask("选哪个 (1/2/3)", "2")
-    if search_choice == "1":
-        tavily_key = ask("Tavily API Key (去 tavily.com 注册拿)", "")
-        if tavily_key:
-            write_env("TAVILY_API_KEY", tavily_key)
+search_choice = ask("选哪个 (1/2/3)", "2")
+if search_choice == "1":
+    tavily_key = ask("Tavily API Key (去 tavily.com 注册拿)", "")
+    if tavily_key:
+        write_env("TAVILY_API_KEY", tavily_key)
+        run(["hermes", "config", "set", "web.tavily_api_key_env", "TAVILY_API_KEY"])
         run(["hermes", "config", "set", "web.backend", "tavily"])
         run(["hermes", "config", "set", "web.fallback_backend", "duckduckgo"])
-    elif search_choice == "2":
-        run(["hermes", "config", "set", "web.backend", "duckduckgo"])
     else:
-        print("  跳过搜索配置。")
+        print(" ⚠ Tavily Key 为空，回退到 DuckDuckGo")
+        run(["hermes", "config", "set", "web.backend", "duckduckgo"])
+elif search_choice == "2":
+    run(["hermes", "config", "set", "web.backend", "duckduckgo"])
+else:
+    print(" 跳过搜索配置。")
 
 
 def feat3_memory():
@@ -382,10 +404,10 @@ def feat6_compression():
     print("  lcm — 无损上下文管理（需插件，详见 context-engine-plugin 文档）")
     print("  其他插件 — 由社区/第三方提供")
     engine = ask("选择 context.engine", "compressor")
+    run(["hermes", "config", "set", "context.engine", engine])
+    print(f" ✓ context.engine = {engine}")
     if engine != "compressor":
-        run(["hermes", "config", "set", "context.engine", engine])
-        print(f"  ✓ context.engine = {engine}")
-        print("  注意：插件引擎需先安装，否则 fallback 到 compressor")
+        print(" 注意：插件引擎需先安装，否则 fallback 到 compressor")
 
     if not ask_yn("调整压缩参数？(y/n)", "y"):
         return
@@ -453,9 +475,9 @@ def feat7_token_monitor():
             run(["pip", "install", "hermes-dashboard"])
         print("  使用：hermes-dashboard")
     elif monitor == "3":
-        print("  启动：hermes dashboard")
+        print(" 启动：hermes dashboard")
         if ask_yn("现在启动？(y/n)", "n"):
-            run(["hermes", "dashboard"])
+            run(["hermes", "dashboard"], background=True)
 
     print("\n  RTK (Rust Token Killer)：把终端命令 token 消耗压掉 80-90%")
     if ask_yn("安装 RTK？(需要 cargo)(y/n)", "n"):
@@ -541,6 +563,7 @@ def feat10_delegation():
     if ask_yn("是否配置默认并发上限？(y/n)", "n"):
         max_concurrent = ask_int("最大并发子 agent 数", 3, min_val=1, max_val=10)
         run(["hermes", "config", "set", "delegation.max_concurrent_children", str(max_concurrent)])
+        print(f" ✓ max_concurrent_children = {max_concurrent}")
 
     if ask_yn("是否配置最大 spawn 深度？(y/n)", "n"):
         max_depth = ask_int("delegation.max_spawn_depth（orchestrator 最多嵌套几层，默认2）", 2, min_val=1, max_val=5)
@@ -599,7 +622,7 @@ def feat12_ecosystem():
             run(["hermes", "skills", "install", "wondelai/skills"])
     if skill_choice in ("2", "3"):
         if ask_yn("安装 awesome-agent-skills？(y/n)", "y"):
-            run(["hermes", "skills", "install", "awesome-agent-skills"])
+            run(["hermes", "skills", "install", "nicholasgriffintn/awesome-agent-skills"])
 
     print("\n  --- 文档处理工具 ---")
     print("  Pandoc：万能格式转换（PDF/DOCX/HTML/EPUB → Markdown）")
@@ -638,19 +661,20 @@ def feat13_provider_routing():
         return
 
     sort = ask("sort 策略 (price/throughput/latency)", "price")
+    if sort not in ("price", "throughput", "latency"):
+        print(f" ⚠ 无效策略 '{sort}'，回退默认 price")
+        sort = "price"
     run(["hermes", "config", "set", "provider_routing.sort", sort])
 
     if ask_yn("是否设置 provider 白名单？(y/n)", "n"):
         only = ask("白名单 provider（逗号分隔，如 Anthropic,Google）", "")
         if only:
-            for p in only.split(","):
-                run(["hermes", "config", "set", "provider_routing.only", p.strip()])
+            run(["hermes", "config", "set", "provider_routing.only", only])
 
     if ask_yn("是否设置 provider 黑名单？(y/n)", "n"):
         ignore = ask("黑名单 provider（逗号分隔，如 Together,DeepInfra）", "")
         if ignore:
-            for p in ignore.split(","):
-                run(["hermes", "config", "set", "provider_routing.ignore", p.strip()])
+            run(["hermes", "config", "set", "provider_routing.ignore", ignore])
 
     if ask_yn("禁止数据收集？(y/n)", "y"):
         run(["hermes", "config", "set", "provider_routing.data_collection", "deny"])
@@ -686,8 +710,10 @@ def feat14_fallback_provider():
 
     if fb_provider == "custom":
         fb_base_url = ask("fallback base_url (custom 必填)", "")
-        if fb_base_url:
-            run(["hermes", "config", "set", "fallback_model.base_url", fb_base_url])
+        if not fb_base_url:
+            print(" ⚠ custom 必须填 base_url，跳过 fallback 配置")
+            return
+        run(["hermes", "config", "set", "fallback_model.base_url", fb_base_url])
         fb_api_key = ask("fallback API key (写入.env)", "")
         if fb_api_key:
             write_env("FALLBACK_API_KEY", fb_api_key)
@@ -756,7 +782,7 @@ def feat16_nous_tool_gateway():
     print("\n  先检查订阅状态...")
     r = subprocess.run(["hermes", "status"], capture_output=True, text=True, timeout=15)
     status = r.stdout + r.stderr
-    if "Tool Gateway" in status and ("active" in status.lower() or "enabled" in status.lower()):
+    if "Tool Gateway" in status and ("active" in status.lower().split() or "enabled" in status.lower().split()):
         print("  ✓ 检测到 Tool Gateway 已激活")
     else:
         print("  ⚠ 未检测到 Tool Gateway 激活状态")
